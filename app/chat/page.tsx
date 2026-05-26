@@ -28,7 +28,7 @@ import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
 
 export default function ChatPage() {
-  const { user } = useAuth()
+  const { user, loading } = useAuth()
   const router = useRouter()
   const [conversationId, setConversationId] = useState<string>('')
   const [conversationTitle, setConversationTitle] = useState<string>('New Chat')
@@ -40,15 +40,19 @@ export default function ChatPage() {
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [editedTitle, setEditedTitle] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [editModeId, setEditModeId] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState('')
+  const [editHistory, setEditHistory] = useState<Record<string, Array<{ oldUser: string; oldAssistantId?: string; oldAssistantContent?: string; editedAt?: number; editorId?: string }>>>({})
+  const [showPreviousMap, setShowPreviousMap] = useState<Record<string, number | null>>({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
-  // Redirect to login if not authenticated
+  // Redirect to login if not authenticated (wait until auth finished initializing)
   useEffect(() => {
-    if (!user) {
+    if (!user && !loading) {
       router.push('/auth/login')
     }
-  }, [user, router])
+  }, [user, loading, router])
 
   // Auto-scroll to bottom
   const scrollToBottom = () => {
@@ -78,6 +82,7 @@ export default function ChatPage() {
           ...doc.data(),
         })) as Message[]
         setMessages(msgs)
+
       } catch (error) {
         console.error('Error loading messages:', error)
       } finally {
@@ -180,12 +185,172 @@ export default function ChatPage() {
     try {
       await updateDoc(doc(db, 'messages', conversationId, 'items', messageId), {
         content: newContent,
+        editedAt: Date.now(),
+        editorId: user?.uid || null,
       })
       setMessages((prev) =>
         prev.map((msg) => (msg.id === messageId ? { ...msg, content: newContent } : msg))
       )
     } catch (error) {
       console.error('Error editing message:', error)
+    }
+  }
+
+  const handleStartEditMessage = (messageId: string, currentContent: string) => {
+    setEditModeId(messageId)
+    setEditDraft(currentContent)
+  }
+
+  const cancelInlineEdit = () => {
+    setEditModeId(null)
+    setEditDraft('')
+  }
+
+  // Send assistant reply for an existing user message without adding a new user message
+  const sendAssistantForMessage = async (userMessageId: string, content: string) => {
+    try {
+      // Create abort controller for this request
+      abortControllerRef.current = new AbortController()
+
+      const conversationHistory = messages
+        .slice(-5)
+        .map((msg) => ({ role: msg.role, content: msg.content }))
+
+      // Ensure provider and model are strings before sending
+      const safeProvider = typeof provider === 'string' ? provider : 'gemini'
+      const safeModel = typeof model === 'string' ? model : 'gemini-2.5-flash'
+
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId,
+          message: content,
+          userId: user?.uid,
+          messages: [...conversationHistory, { role: 'user', content }],
+          provider: safeProvider,
+          model: safeModel,
+        }),
+        signal: abortControllerRef.current?.signal,
+      })
+
+      if (!response.ok) throw new Error('Failed to get chat response')
+
+      const reader = response.body?.getReader()
+      if (!reader) throw new Error('No response body')
+
+      let assistantContent = ''
+      const decoder = new TextDecoder()
+      let messageId = uuidv4()
+
+      // Create placeholder assistant message
+      const assistantMessage: Message = {
+        id: messageId,
+        conversationId,
+        role: 'assistant',
+        content: '',
+        createdAt: Date.now(),
+      }
+
+      setMessages((prev) => [...prev, assistantMessage])
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        const chunk = decoder.decode(value)
+        const lines = chunk.split('\n')
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              if (data.type === 'chunk') {
+                assistantContent += data.content
+                setMessages((prev) => {
+                  const newMessages = [...prev]
+                  const lastMsg = newMessages[newMessages.length - 1]
+                  if (lastMsg && lastMsg.role === 'assistant') {
+                    lastMsg.content = assistantContent
+                  }
+                  return newMessages
+                })
+              } else if (data.type === 'done') {
+                messageId = data.messageId
+              }
+            } catch (e) {
+              // ignore
+            }
+          }
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('Generation aborted')
+      } else {
+        console.error('Error generating assistant reply:', error)
+      }
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleSaveInlineEdit = async (messageId: string) => {
+    const next = editDraft.trim()
+    if (!next) return
+
+    const idx = messages.findIndex((m) => m.id === messageId)
+    if (idx === -1) return
+
+    const userMsg = messages[idx]
+    const oldUser = userMsg.content
+
+    // capture assistant after this user message
+    const assistantMsg = messages[idx + 1] && messages[idx + 1].role === 'assistant' ? messages[idx + 1] : null
+
+    // save history (prepend to array)
+    const editRecord = {
+      oldUser,
+      oldAssistantId: assistantMsg?.id || null,
+      oldAssistantContent: assistantMsg?.content || null,
+      editedAt: Date.now(),
+      editorId: user?.uid || null,
+    }
+    setEditHistory((prev) => ({
+      ...prev,
+      [messageId]: [editRecord as any].concat(prev[messageId] || []),
+    }))
+
+    // persist history to Firestore
+    try {
+      await addDoc(collection(db, 'messages', conversationId, 'items', messageId, 'edits'), editRecord)
+    } catch (err) {
+      console.error('Error persisting edit history:', err)
+    }
+
+    // update user message in DB and state
+    await handleEditMessage(messageId, next)
+
+    // if assistant exists, delete it and regenerate reply for the same user message
+    if (assistantMsg) {
+      await handleDeleteMessage(assistantMsg.id)
+      await sendAssistantForMessage(messageId, next)
+    } else {
+      // No assistant yet; trigger a reply for this message
+      await sendAssistantForMessage(messageId, next)
+    }
+
+    setEditModeId(null)
+    setEditDraft('')
+  }
+
+  const fetchEditHistory = async (messageId: string) => {
+    if (editHistory[messageId]) return
+    try {
+      const q = query(collection(db, 'messages', conversationId, 'items', messageId, 'edits'), orderBy('editedAt', 'desc'))
+      const snap = await getDocs(q)
+      const edits = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }))
+      setEditHistory((prev) => ({ ...prev, [messageId]: edits }))
+    } catch (err) {
+      console.error('Error fetching edit history for', messageId, err)
     }
   }
 
@@ -521,17 +686,101 @@ export default function ChatPage() {
               </div>
             </div>
           ) : (
-            messages.map((message) => (
-              <ChatMessage
-                key={message.id}
-                message={message}
-                isUser={message.role === 'user'}
-                isLoading={isLoading && message.role === 'assistant' && message === messages[messages.length - 1]}
-                onEdit={handleEditMessage}
-                onDelete={handleDeleteMessage}
-                onRegenerate={handleRegenerateMessage}
-              />
-            ))
+            messages.map((message, i) => {
+              // Determine overrides for showing previous versions
+              let renderedMessage = { ...message }
+              if (message.role === 'assistant') {
+                const prev = messages[i - 1]
+                if (prev && prev.role === 'user') {
+                  const history = editHistory[prev.id]
+                  if (history && history.length > 0 && typeof showPreviousMap[prev.id] === 'number') {
+                    const idx = showPreviousMap[prev.id] as number
+                    renderedMessage = { ...renderedMessage, content: history[idx]?.oldAssistantContent || renderedMessage.content }
+                  }
+                }
+              } else if (message.role === 'user') {
+                const history = editHistory[message.id]
+                if (history && history.length > 0 && typeof showPreviousMap[message.id] === 'number') {
+                  const idx = showPreviousMap[message.id] as number
+                  renderedMessage = { ...renderedMessage, content: history[idx]?.oldUser || renderedMessage.content }
+                }
+              }
+
+              return (
+                <div key={message.id} className="flex flex-col gap-2">
+                  <ChatMessage
+                    message={renderedMessage}
+                    isUser={message.role === 'user'}
+                    isLoading={isLoading && message.role === 'assistant' && message === messages[messages.length - 1]}
+                    onEdit={handleEditMessage}
+                    onDelete={handleDeleteMessage}
+                    onRegenerate={handleRegenerateMessage}
+                    isEditing={editModeId === message.id}
+                    editValue={editDraft}
+                    onEditChange={(v) => setEditDraft(v)}
+                    onSaveEdit={() => handleSaveInlineEdit(message.id)}
+                    onCancelEdit={cancelInlineEdit}
+                  />
+
+                  {message.role === 'user' && (
+                    <div className="flex items-center justify-end gap-2 px-1 -mt-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleStartEditMessage(message.id, message.content)}
+                        className="h-8 gap-2 text-[#6b8e23] hover:bg-[#e8f4e3] hover:text-[#5a7620]"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                        Edit
+                      </Button>
+
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={async () => {
+                            if (!editHistory[message.id]) await fetchEditHistory(message.id)
+                            // show latest previous revision (index 0)
+                            setShowPreviousMap((prev) => ({ ...prev, [message.id]: prev[message.id] == null ? 0 : null }))
+                          }}
+                          className="h-8 gap-2 text-[#7a8566] hover:bg-[#f5f3ef]"
+                        >
+                          {typeof showPreviousMap[message.id] === 'number' ? 'Show edited' : 'Show previous'}
+                        </Button>
+
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={async () => {
+                            await fetchEditHistory(message.id)
+                            setShowPreviousMap((prev) => ({ ...prev, [message.id]: prev[message.id] ?? 0 }))
+                          }}
+                          className="h-8 gap-2 text-[#7a8566] hover:bg-[#f5f3ef]"
+                        >
+                          History
+                        </Button>
+
+                        {editHistory[message.id] && editHistory[message.id].length > 0 && (
+                          <>
+                            <select
+                              value={typeof showPreviousMap[message.id] === 'number' ? (showPreviousMap[message.id] as number) : 0}
+                              onChange={(e) => setShowPreviousMap((prev) => ({ ...prev, [message.id]: Number(e.target.value) }))}
+                              className="h-8 rounded border border-[#e8e5df] bg-white px-2 text-xs text-[#2d2d2d]"
+                            >
+                              {editHistory[message.id].map((rev, revIdx) => (
+                                <option key={revIdx} value={revIdx}>
+                                  Rev {editHistory[message.id].length - revIdx} • {rev.editedAt ? new Date(rev.editedAt).toLocaleString() : 'unknown time'}
+                                </option>
+                              ))}
+                            </select>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })
           )}
           <div ref={messagesEndRef} />
         </div>

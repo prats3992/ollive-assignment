@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState } from 'react'
+import React from 'react'
 import { Message } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import ReactMarkdown from 'react-markdown'
@@ -21,9 +21,29 @@ interface ChatMessageProps {
   onDelete?: (messageId: string) => void
   onRegenerate?: (messageId: string) => void
   onStartEdit?: (messageId: string, currentContent: string) => void
+  // Inline editing props
+  isEditing?: boolean
+  editValue?: string
+  onEditChange?: (val: string) => void
+  onSaveEdit?: () => void
+  onCancelEdit?: () => void
 }
 
-export function ChatMessage({ message, isLoading, isUser, onEdit, onDelete, onRegenerate, onStartEdit }: ChatMessageProps) {
+export function ChatMessage(props: ChatMessageProps) {
+  const {
+    message,
+    isLoading,
+    isUser,
+    onEdit,
+    onDelete,
+    onRegenerate,
+    onStartEdit,
+    isEditing,
+    editValue,
+    onEditChange,
+    onSaveEdit,
+    onCancelEdit,
+  } = props
 
   return (
     <div className={cn('flex w-full mb-4 group', isUser ? 'justify-end' : 'justify-start')}>
@@ -37,7 +57,27 @@ export function ChatMessage({ message, isLoading, isUser, onEdit, onDelete, onRe
       >
         <CardContent className="px-2">
           {isUser ? (
-            <p className="text-sm break-words">{message.content}</p>
+            isEditing ? (
+              <div className="flex flex-col gap-2">
+                <textarea
+                  value={editValue}
+                  onChange={(e) => onEditChange?.(e.target.value)}
+                  className="w-full p-2 rounded text-sm text-black"
+                  rows={4}
+                />
+                <div className="flex gap-2 justify-end">
+                  <Button variant="ghost" size="sm" onClick={onCancelEdit} className="text-[#dc2626]">Cancel</Button>
+                  <Button size="sm" onClick={onSaveEdit} className="bg-white text-[#2d2d2d]">Save</Button>
+                </div>
+              </div>
+            ) : (
+              <div className="relative">
+                <p className="text-sm break-words">{message.content}</p>
+                {message.editedAt && (
+                  <span className="absolute -bottom-5 right-0 text-xs text-[#7a8566]">Edited • {new Date(message.editedAt).toLocaleString()}</span>
+                )}
+              </div>
+            )
           ) : (
             <div className="text-sm prose prose-sm dark:prose-invert max-w-none break-words">
               <ReactMarkdown
@@ -74,6 +114,7 @@ export function ChatMessage({ message, isLoading, isUser, onEdit, onDelete, onRe
             </div>
           )}
         </CardContent>
+
         {message.tokensUsed && !isUser && (
           <div className="flex gap-2 px-4 pb-3 pt-2 border-t border-[#e8e5df]">
             <Badge variant="secondary" className="bg-[#f5f3ef] text-[#2d2d2d] flex gap-1">
@@ -90,55 +131,51 @@ export function ChatMessage({ message, isLoading, isUser, onEdit, onDelete, onRe
           </div>
         )}
 
-        {/* Compact overflow menu for actions to reduce visual noise */}
-        <div className="absolute right-2 top-2">
-          <div className="relative">
-            <button
-              aria-label="Message actions"
-              onClick={(e) => {
-                e.stopPropagation()
-                const menu = document.getElementById(`msg-menu-${message.id}`)
-                if (menu) menu.classList.toggle('hidden')
-              }}
-              className="p-1 rounded bg-white/80 hover:bg-white shadow-sm"
-            >
-              <MoreVertical className="w-4 h-4 text-[#6b8e23]" />
-            </button>
+        {/* Compact overflow menu for actions to reduce visual noise (assistant only) */}
+        {!isUser && (
+          <div className="absolute right-2 top-2">
+            <div className="relative">
+              <button
+                aria-label="Message actions"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  const menu = document.getElementById(`msg-menu-${message.id}`)
+                  if (menu) menu.classList.toggle('hidden')
+                }}
+                className="p-1 rounded bg-white/80 hover:bg-white shadow-sm"
+              >
+                <MoreVertical className="w-4 h-4 text-[#6b8e23]" />
+              </button>
 
-            <div id={`msg-menu-${message.id}`} className="hidden absolute right-0 mt-2 w-40 bg-white border border-[#e8e5df] rounded shadow-lg z-50">
-              <div className="flex flex-col py-1">
-                {/* Edit handled externally for better UX */}
-
-                {!isUser && (
-                  <>
-                    <button
-                      className="text-left px-3 py-2 text-sm hover:bg-[#f5f3ef]"
-                      onClick={() => onRegenerate?.(message.id)}
-                    >
-                      <span className="inline-flex items-center gap-2"><RotateCcw className="w-4 h-4" /> Regenerate</span>
-                    </button>
-                    <button
-                      className="text-left px-3 py-2 text-sm hover:bg-[#f5f3ef] text-[#dc2626]"
-                      onClick={() => {
-                        if (window.confirm('Delete this message?')) {
-                          onDelete?.(message.id)
-                        }
-                      }}
-                    >
-                      <span className="inline-flex items-center gap-2"><Trash2 className="w-4 h-4" /> Delete</span>
-                    </button>
-                    <button
-                      className="text-left px-3 py-2 text-sm hover:bg-[#f5f3ef]"
-                      onClick={() => navigator.clipboard.writeText(message.content)}
-                    >
-                      <span className="inline-flex items-center gap-2"><Copy className="w-4 h-4" /> Copy</span>
-                    </button>
-                  </>
-                )}
+              <div id={`msg-menu-${message.id}`} className="hidden absolute right-0 mt-2 w-40 bg-white border border-[#e8e5df] rounded shadow-lg z-50">
+                <div className="flex flex-col py-1">
+                  <button
+                    className="text-left px-3 py-2 text-sm hover:bg-[#f5f3ef]"
+                    onClick={() => onRegenerate?.(message.id)}
+                  >
+                    <span className="inline-flex items-center gap-2"><RotateCcw className="w-4 h-4" /> Regenerate</span>
+                  </button>
+                  <button
+                    className="text-left px-3 py-2 text-sm hover:bg-[#f5f3ef] text-[#dc2626]"
+                    onClick={() => {
+                      if (window.confirm('Delete this message?')) {
+                        onDelete?.(message.id)
+                      }
+                    }}
+                  >
+                    <span className="inline-flex items-center gap-2"><Trash2 className="w-4 h-4" /> Delete</span>
+                  </button>
+                  <button
+                    className="text-left px-3 py-2 text-sm hover:bg-[#f5f3ef]"
+                    onClick={() => navigator.clipboard.writeText(message.content)}
+                  >
+                    <span className="inline-flex items-center gap-2"><Copy className="w-4 h-4" /> Copy</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        )}
       </Card>
     </div>
   )

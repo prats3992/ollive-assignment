@@ -17,6 +17,8 @@ export interface Message {
   role: 'user' | 'assistant'
   content: string
   createdAt: number // timestamp
+  editedAt?: number
+  editorId?: string
   tokensUsed?: {
     input: number
     output: number
