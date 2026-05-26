@@ -1,7 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/firebase'
-import { collection, addDoc, serverTimestamp, doc, getDoc } from 'firebase/firestore'
+import admin from 'firebase-admin'
+import { getApps } from 'firebase-admin/app'
 import { IngestLogPayload } from '@/lib/types'
+
+function initAdmin() {
+  if (getApps().length === 0) {
+    const privateKey = process.env.FIREBASE_PRIVATE_KEY
+      ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+      : undefined
+
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey,
+      }),
+    })
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,25 +44,27 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Use Admin SDK for server-side reads/writes (bypass security rules)
+    initAdmin()
+    const adminDb = admin.firestore()
+
     // Get userId from conversation document
     let userId = 'anonymous'
     try {
-      const convRef = doc(db, 'conversations', payload.conversationId)
-      const convSnap = await getDoc(convRef)
-      if (convSnap.exists()) {
-        userId = convSnap.data().userId || 'anonymous'
+      const convDoc = await adminDb.collection('conversations').doc(payload.conversationId).get()
+      if (convDoc.exists) {
+        userId = convDoc.data()?.userId || 'anonymous'
       }
     } catch (err) {
       console.warn('Could not fetch conversation for userId:', err)
     }
 
-    // Store in Firestore
-    const logsRef = collection(db, 'inferenceLogs')
-    const docRef = await addDoc(logsRef, {
+    // Store in Firestore via Admin SDK
+    const docRef = await adminDb.collection('inferenceLogs').add({
       ...payload,
-      userId, // Add userId for filtering in dashboard
+      userId,
       timestamp: Date.now(),
-      createdAt: serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
     })
 
     return NextResponse.json(

@@ -43,7 +43,9 @@ export function ProviderSelector({
                     <button
                       key={model}
                       onClick={() => {
-                        onSelect(provider.name, model)
+                        // Ensure we're passing strings, not objects
+                        const providerName = typeof provider.name === 'string' ? provider.name : 'gemini'
+                        onSelect(providerName, model)
                         setIsOpen(false)
                       }}
                       className={`text-xs px-2 py-1 rounded font-medium ${

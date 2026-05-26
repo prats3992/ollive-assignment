@@ -91,8 +91,16 @@ export default function ChatPage() {
   const createNewConversation = async (selectedProvider?: string, selectedModel?: string) => {
     if (!user) return
 
-    const providerToUse = selectedProvider || provider
-    const modelToUse = selectedModel || model
+    let providerToUse = selectedProvider || provider
+    let modelToUse = selectedModel || model
+
+    // Ensure provider and model are strings (not objects)
+    if (typeof providerToUse !== 'string') {
+      providerToUse = 'gemini'
+    }
+    if (typeof modelToUse !== 'string') {
+      modelToUse = 'gemini-2.5-flash'
+    }
 
     try {
       const newConv = await addDoc(collection(db, 'conversations'), {
@@ -122,8 +130,20 @@ export default function ChatPage() {
       if (convSnap.exists()) {
         const data = convSnap.data()
         setConversationTitle(title || data.title || 'Chat')
-        setProvider(data.provider || 'gemini')
-        setModel(data.model || 'gemini-2.5-flash')
+        
+        // Sanitize provider and model (ensure they're strings)
+        let loadedProvider = data.provider || 'gemini'
+        let loadedModel = data.model || 'gemini-2.5-flash'
+        
+        if (typeof loadedProvider !== 'string') {
+          loadedProvider = 'gemini'
+        }
+        if (typeof loadedModel !== 'string') {
+          loadedModel = 'gemini-2.5-flash'
+        }
+        
+        setProvider(loadedProvider)
+        setModel(loadedModel)
       }
     } catch (error) {
       console.error('Error fetching conversation:', error)
@@ -241,6 +261,10 @@ export default function ChatPage() {
 
       conversationHistory.push({ role: 'user', content })
 
+      // Ensure provider and model are strings before sending
+      const safeProvider = typeof provider === 'string' ? provider : 'gemini'
+      const safeModel = typeof model === 'string' ? model : 'gemini-2.5-flash'
+
       // Call the chat API with streaming
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -252,8 +276,8 @@ export default function ChatPage() {
           message: content,
           userId: user.uid,
           messages: conversationHistory,
-          provider,
-          model,
+          provider: safeProvider,
+          model: safeModel,
         }),
         signal: abortControllerRef.current.signal,
       })
@@ -444,18 +468,25 @@ export default function ChatPage() {
           <div className="flex gap-3 items-center flex-1 ml-4">
             <ProviderSelector
               onSelect={(selectedProvider, selectedModel) => {
+                const safeProvider = typeof selectedProvider === 'string' ? selectedProvider : 'gemini'
+                const safeModel = typeof selectedModel === 'string' ? selectedModel : 'gemini-2.5-flash'
+
                 if (!conversationId) {
-                  setProvider(selectedProvider)
-                  setModel(selectedModel)
+                  setProvider(safeProvider)
+                  setModel(safeModel)
                 } else {
                   // Update existing conversation
+                  // Ensure selectedProvider and selectedModel are strings
+                  const safeProvider = typeof selectedProvider === 'string' ? selectedProvider : 'gemini'
+                  const safeModel = typeof selectedModel === 'string' ? selectedModel : 'gemini-2.5-flash'
+                  
                   updateDoc(doc(db, 'conversations', conversationId), {
-                    provider: selectedProvider,
-                    model: selectedModel,
+                    provider: safeProvider,
+                    model: safeModel,
                     updatedAt: Date.now(),
                   }).catch((err) => console.error('Error updating provider:', err))
-                  setProvider(selectedProvider)
-                  setModel(selectedModel)
+                  setProvider(safeProvider)
+                  setModel(safeModel)
                 }
               }}
               currentProvider={provider}
@@ -518,7 +549,7 @@ export default function ChatPage() {
                   size="sm"
                   onClick={handleCancel}
                   title="Stop generation"
-                  className="bg-[#dc2626] hover:bg-[#b91c1c]"
+                  className="bg-[#dc2626] hover:bg-[#b91c1c] text-white"
                 >
                   <X className="w-4 h-4 mr-2" />
                   Stop

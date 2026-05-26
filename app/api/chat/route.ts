@@ -1,14 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { chat } from '@/lib/llm/chat'
-import { db } from '@/lib/firebase'
-import {
-  collection,
-  addDoc,
-  getDoc,
-  doc,
-  updateDoc,
-  serverTimestamp,
-} from 'firebase/firestore'
+import admin from 'firebase-admin'
+import { getApps } from 'firebase-admin/app'
+
+// Initialize Firebase Admin SDK on server
+function initAdmin() {
+  if (getApps().length === 0) {
+    const privateKey = process.env.FIREBASE_PRIVATE_KEY
+      ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+      : undefined
+
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey,
+      }),
+    })
+  }
+}
 import { redactPII } from '@/lib/pii-redaction'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -31,11 +41,15 @@ export async function POST(request: NextRequest) {
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          // Get conversation to retrieve context
-          const convRef = doc(db, 'conversations', conversationId)
-          const convSnap = await getDoc(convRef)
+          // Ensure admin SDK is initialized and get Firestore
+          initAdmin()
+          const adminDb = admin.firestore()
 
-          if (!convSnap.exists()) {
+          // Get conversation to retrieve context
+          const convRef = adminDb.collection('conversations').doc(conversationId)
+          const convSnap = await convRef.get()
+
+          if (!convSnap.exists) {
             controller.enqueue(encoder.encode('data: {"error": "Conversation not found"}\n\n'))
             controller.close()
             return
@@ -88,14 +102,14 @@ export async function POST(request: NextRequest) {
           })
 
           // Save user message with optional PII redaction
-          await addDoc(collection(db, 'messages', conversationId, 'items'), {
+          await adminDb.collection('messages').doc(conversationId).collection('items').add({
             role: 'user',
             content: redactPII(message), // Apply PII redaction
             createdAt: Date.now(),
           })
 
           // Save assistant message with optional PII redaction
-          await addDoc(collection(db, 'messages', conversationId, 'items'), {
+          await adminDb.collection('messages').doc(conversationId).collection('items').add({
             role: 'assistant',
             content: redactPII(response.response), // Apply PII redaction
             createdAt: Date.now(),
@@ -103,9 +117,9 @@ export async function POST(request: NextRequest) {
           })
 
           // Update conversation
-          await updateDoc(convRef, {
+          await adminDb.collection('conversations').doc(conversationId).update({
             updatedAt: Date.now(),
-            messageCount: (conversationData.messageCount || 0) + 2,
+            messageCount: (conversationData?.messageCount || 0) + 2,
           })
 
           // Send final message with metadata
