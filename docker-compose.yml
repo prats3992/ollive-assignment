@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # Main Next.js application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      # Firebase Configuration
+      NEXT_PUBLIC_FIREBASE_API_KEY: ${NEXT_PUBLIC_FIREBASE_API_KEY}
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN}
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${NEXT_PUBLIC_FIREBASE_PROJECT_ID}
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: ${NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET}
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID}
+      NEXT_PUBLIC_FIREBASE_APP_ID: ${NEXT_PUBLIC_FIREBASE_APP_ID}
+
+      # Firebase Admin (for encrypted API key storage)
+      FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY}
+      FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL}
+
+      # LLM Provider Keys (fallback for local use)
+      NEXT_PUBLIC_GEMINI_API_KEY: ${NEXT_PUBLIC_GEMINI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      CLAUDE_API_KEY: ${CLAUDE_API_KEY}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+
+      # Encryption Key for storing user API keys
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+
+      # App Configuration
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:3000}
+      NODE_ENV: production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    depends_on:
+      - firebase-emulator
+    networks:
+      - ollive-network
+
+  # Firebase Emulator Suite (optional, for local development)
+  firebase-emulator:
+    image: otermin/firebase-emulator:latest
+    ports:
+      - "4000:4000"  # Firestore emulator
+      - "5000:5000"  # Realtime Database emulator
+      - "9000:9000"  # Pub/Sub emulator
+    environment:
+      FIRESTORE_EMULATOR_HOST: 0.0.0.0:4000
+    volumes:
+      - firebase-emulator-data:/data
+    restart: unless-stopped
+    networks:
+      - ollive-network
+
+networks:
+  ollive-network:
+    driver: bridge
+
+volumes:
+  firebase-emulator-data:

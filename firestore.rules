@@ -1,0 +1,36 @@
+// Firestore Security Rules for Ollive
+// Deploy with: firebase deploy --only firestore:rules
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Conversations - Users can only access their own
+    match /conversations/{conversationId} {
+      allow read, write: if request.auth.uid == resource.data.userId;
+      allow create: if request.auth.uid == request.resource.data.userId;
+    }
+
+    // Messages - Nested under conversations
+    match /conversations/{conversationId}/items/{messageId} {
+      allow read, list: if request.auth.uid == get(/databases/$(database)/documents/conversations/$(conversationId)).data.userId;
+      allow create, write, delete: if request.auth.uid == get(/databases/$(database)/documents/conversations/$(conversationId)).data.userId;
+    }
+
+    // Inference Logs - Users can only access their own
+    match /inferenceLogs/{logId} {
+      allow read, list: if request.auth.uid == resource.data.userId;
+      allow write: if request.auth.uid == request.resource.data.userId;
+    }
+
+    // User Settings - Encrypted API keys
+    // Users can only read/write their own settings
+    match /userSettings/{userId} {
+      allow read, write: if request.auth.uid == userId;
+    }
+
+    // Deny everything else
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
