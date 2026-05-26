@@ -107,10 +107,6 @@ export default function LoginPage() {
             </Link>
           </CardContent>
         </Card>
-
-        <div className="mt-6 text-center text-xs text-[#7a8566]">
-          <p>Demo credentials: test@example.com / password123</p>
-        </div>
       </div>
     </div>
   )
