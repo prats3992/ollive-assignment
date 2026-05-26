@@ -359,11 +359,3 @@ NODE_ENV=production pnpm start
 # Deploy Firestore rules:
 firebase deploy --only firestore:rules
 ```
-
-## License
-
-MIT
-
-## Support
-
-For issues or questions, contact work@ollive.ai
